@@ -4,6 +4,7 @@ import thriftpy
 import json
 import logging
 import time
+import copy
 
 from datetime import datetime
 from datetime import timedelta
@@ -12,6 +13,7 @@ from collections import namedtuple
 
 import requests
 from thriftpy.rpc import make_client
+from thriftpy.transport import TTransportException
 from xylose.scielodocument import Article, Journal, Issue
 
 
@@ -632,28 +634,32 @@ class ThriftClient(object):
 
     def dispatcher(self, *args, **kwargs):
 
-        for attempt in range(1, self.ATTEMPTS+1):
+        for attempt in range(self.ATTEMPTS):
             try:
                 func = args[0]
-                args = args[1:]
-                return func(*args, **kwargs)
+                return getattr(self.client, func)(*args[1:], **kwargs)
+            except TTransportException as e:
+                msg = 'Error requesting articlemeta: %s args: %s kwargs: %s message: %s' % (
+                    str(func), str(args[1:]), str(kwargs), e.message
+                )
+                logger.warning("Request Retry (%d,%d): %s", attempt+1, self.ATTEMPTS, msg)
+                time.sleep(self.ATTEMPTS*2)
+            except self.ARTICLEMETA_THRIFT.ServerError as e:
+                msg = 'Error requesting articlemeta: %s args: %s kwargs: %s message: %s' % (
+                    str(func), str(args[1:]), str(kwargs), e.message
+                )
+                logger.warning("Request Retry (%d,%d): %s", attempt+1, self.ATTEMPTS, msg)
+                time.sleep(self.ATTEMPTS*2)
             except self.ARTICLEMETA_THRIFT.Unauthorized:
                 msg = 'Unautorized access to articlemeta: %s args: %s kwargs: %s' % (
-                    str(func), str(args), str(kwargs)
+                    str(func), str(args[1:]), str(kwargs)
                 )
                 raise UnauthorizedAccess(msg)
             except self.ARTICLEMETA_THRIFT.ValueError as e:
                 msg = 'Error requesting articlemeta: %s args: %s kwargs: %s message: %s' % (
-                    str(func), str(args), str(kwargs), e.message
+                    str(func), str(args[1:]), str(kwargs), e.message
                 )
-                raise ValueError(e.message)
-            except self.ARTICLEMETA_THRIFT.ServerError as e:
-                msg = 'Error requesting articlemeta: %s args: %s kwargs: %s message: %s' % (
-                    str(func), str(args), str(kwargs), e.message
-                )
-                logger.warning("Request Retry (%d,%d): %s", attempt, len(self.ATTEMPTS), msg)
-                time.sleep(5)
-                continue
+                raise ValueError(msg)
 
         raise ServerError(msg)
 
@@ -665,7 +671,7 @@ class ThriftClient(object):
         """
 
         version = self.dispatcher(
-            self.client.getInterfaceVersion
+            'getInterfaceVersion'
         )
 
         return version
@@ -678,7 +684,7 @@ class ThriftClient(object):
         """
 
         journal = self.dispatcher(
-            self.client.add_journal,
+            'add_journal',
             data,
             self._admintoken
         )
@@ -693,7 +699,7 @@ class ThriftClient(object):
         """
 
         issue = self.dispatcher(
-            self.client.add_issue,
+            'add_issue',
             data,
             self._admintoken
         )
@@ -708,7 +714,7 @@ class ThriftClient(object):
         """
 
         document = self.dispatcher(
-            self.client.add_article,
+            'add_article',
             data,
             self._admintoken
         )
@@ -718,7 +724,7 @@ class ThriftClient(object):
     def journal(self, code, collection=None):
 
         journal = self.dispatcher(
-            self.client.get_journal,
+            'get_journal',
             code,
             collection
         )
@@ -748,7 +754,7 @@ class ThriftClient(object):
         while True:
 
             identifiers = self.dispatcher(
-                self.client.get_journal_identifiers,
+                'get_journal_identifiers',
                 collection=collection, issn=issn, limit=limit,
                 offset=offset
             )
@@ -783,7 +789,7 @@ class ThriftClient(object):
             offset = 0
             while True:
                 identifiers = self.dispatcher(
-                    self.client.journal_history_changes,
+                    'journal_history_changes',
                     collection=collection, event=event, code=code,
                     from_date=from_date, until_date=until_date,
                     limit=limit, offset=offset
@@ -815,21 +821,21 @@ class ThriftClient(object):
     def exists_journal(self, code, collection):
 
         return self.dispatcher(
-            self.client.exists_journal,
+            'exists_journal',
             code,
             collection
         )
 
     def exists_issue(self, code, collection):
         return self.dispatcher(
-            self.client.exists_issue.
+            'exists_issue',
             code,
             collection
         )
 
     def exists_document(self, code, collection):
         return self.dispatcher(
-            self.client.exists_article,
+            'exists_article',
             code,
             collection
         )
@@ -837,7 +843,7 @@ class ThriftClient(object):
     def set_aid(self, code, collection, aid):
 
         self.dispatcher(
-            self.client.set_aid,
+            'set_aid',
             code,
             collection,
             aid,
@@ -846,7 +852,7 @@ class ThriftClient(object):
 
     def set_doaj_id(self, code, collection, doaj_id):
         self.dispatcher(
-            self.client.set_doaj_id,
+            'set_doaj_id',
             code, collection,
             doaj_id,
             self._admintoken
@@ -854,7 +860,7 @@ class ThriftClient(object):
 
     def issue(self, code, collection, replace_journal_metadata=True):
         issue = self.dispatcher(
-            self.client.get_issue,
+            'get_issue',
             code=code,
             collection=collection,
             replace_journal_metadata=True
@@ -888,7 +894,7 @@ class ThriftClient(object):
             offset = 0
             while True:
                 issues = self.dispatcher(
-                    self.client.get_issues,
+                    'get_issues',
                     collection=collection, issn=issn, from_date=from_date,
                     until_date=until_date, limit=limit, offset=offset,
                     extra_filter=extra_filter
@@ -920,7 +926,7 @@ class ThriftClient(object):
             offset = 0
             while True:
                 identifiers = self.dispatcher(
-                    self.client.get_issue_identifiers,
+                    'get_issue_identifiers',
                     collection=collection, issn=issn, from_date=from_date,
                     until_date=until_date, limit=limit, offset=offset,
                     extra_filter=extra_filter
@@ -958,7 +964,7 @@ class ThriftClient(object):
             offset = 0
             while True:
                 identifiers = self.dispatcher(
-                    self.client.issue_history_changes,
+                    'issue_history_changes',
                     collection=collection, event=event, code=code,
                     from_date=from_date, until_date=until_date,
                     limit=limit, offset=offset
@@ -989,8 +995,9 @@ class ThriftClient(object):
                 offset += limit
 
     def document(self, code, collection, replace_journal_metadata=True, fmt='xylose', body=False):
+
         article = self.dispatcher(
-            self.client.get_article,
+            'get_article',
             code=code,
             collection=collection,
             replace_journal_metadata=True,
@@ -1030,7 +1037,7 @@ class ThriftClient(object):
             offset = 0
             while True:
                 articles = self.dispatcher(
-                    self.client.get_articles,
+                    'get_articles',
                     collection=collection, issn=issn,
                     from_date=from_date, until_date=until_date,
                     limit=limit, offset=offset,
@@ -1062,7 +1069,7 @@ class ThriftClient(object):
             offset = 0
             while True:
                 identifiers = self.dispatcher(
-                    self.client.get_article_identifiers,
+                    'get_article_identifiers',
                     collection=collection, issn=issn,
                     from_date=from_date, until_date=until_date,
                     limit=limit, offset=offset,
@@ -1101,7 +1108,7 @@ class ThriftClient(object):
             offset = 0
             while True:
                 identifiers = self.dispatcher(
-                    self.client.article_history_changes,
+                    'article_history_changes',
                     collection=collection, event=event, code=code,
                     from_date=from_date, until_date=until_date,
                     limit=limit, offset=offset
@@ -1137,7 +1144,7 @@ class ThriftClient(object):
         """
         result = None
         result = self.dispatcher(
-            self.client.get_collection,
+            'get_collection',
             code=code
         )
 
@@ -1149,7 +1156,7 @@ class ThriftClient(object):
 
     def collections(self, only_identifiers=False):
         identifiers = self.dispatcher(
-            self.client.get_collection_identifiers
+            'get_collection_identifiers'
         )
 
         for identifier in identifiers:
@@ -1163,7 +1170,7 @@ class ThriftClient(object):
 
         result = None
         result = self.dispatcher(
-            self.client.delete_journal,
+            'delete_journal',
             code,
             collection,
             self._admintoken
@@ -1175,7 +1182,7 @@ class ThriftClient(object):
 
         result = None
         result = self.dispatcher(
-            self.client.delete_issue,
+            'delete_issue',
             code,
             collection,
             self._admintoken
@@ -1187,7 +1194,7 @@ class ThriftClient(object):
 
         result = None
         result = self.dispatcher(
-            self.client.delete_article,
+            'delete_article',
             code,
             collection,
             self._admintoken
